@@ -8,7 +8,7 @@ use cosmic::{
     Apply, Element, cosmic_theme,
     iced::{
         Alignment, Length, Size,
-        core::text::{Ellipsize, EllipsizeHeightLimit},
+        core::text::{Ellipsize, EllipsizeHeightLimit, LineHeight},
     },
     theme, widget,
 };
@@ -19,7 +19,7 @@ use crate::backend::{BackendName, Package};
 use crate::config::AppTheme;
 use crate::explore::ExplorePage;
 use crate::fl;
-use crate::icon_cache::icon_cache_handle;
+use crate::icon_cache::{icon_cache_handle, icon_cache_icon};
 use crate::localize::LANGUAGE_SORTER;
 use crate::nav::NavPage;
 use crate::operation::OperationKind;
@@ -30,6 +30,144 @@ use crate::{
 };
 use crate::{CARD_TEXT_WIDTH, app_id::AppId};
 
+/// name + desc + dev
+pub const CARD_TEXT_HEIGHT: f32 = 24.0 + 21.0 + 17.0;
+
+fn dim_color(theme: &cosmic::Theme) -> cosmic::iced::Color {
+    const TOWARD_BG: f32 = 0.15;
+    let cosmic = theme.cosmic();
+    let on = cosmic.on_bg_color();
+    let bg = cosmic.bg_color();
+    let mix = |a: f32, b: f32| a + (b - a) * TOWARD_BG;
+    cosmic::iced::Color::from_rgb(
+        mix(on.red, bg.red),
+        mix(on.green, bg.green),
+        mix(on.blue, bg.blue),
+    )
+}
+
+fn dim_text(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
+    cosmic::iced::widget::text::Style {
+        color: Some(dim_color(theme)),
+        ..Default::default()
+    }
+}
+
+fn dim_svg(theme: &cosmic::Theme) -> widget::svg::Style {
+    widget::svg::Style {
+        color: Some(dim_color(theme)),
+    }
+}
+
+// TODO
+pub fn downloads_label(n: u64) -> &'static str {
+    match n {
+        0..100 => "<100",
+        100..1_000 => "100+",
+        1_000..10_000 => "1K+",
+        10_000..100_000 => "10K+",
+        100_000..1_000_000 => "100K+",
+        _ => "1M+",
+    }
+}
+
+fn card_meta<'a>(
+    icon: widget::icon::Icon,
+    text: impl Into<std::borrow::Cow<'a, str>> + 'a,
+    font: cosmic::font::Font,
+    spacing: &cosmic_theme::Spacing,
+) -> Element<'a, Message> {
+    widget::row::with_children([
+        icon.size(14).class(theme::Svg::custom(dim_svg)).into(),
+        widget::text::caption(text)
+            .font(font)
+            .class(theme::Text::Custom(dim_text))
+            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+            .into(),
+    ])
+    .align_y(Alignment::Center)
+    .spacing(spacing.space_xxxs)
+    .into()
+}
+
+pub fn card_text_column<'a>(
+    info: &'a AppInfo,
+    spacing: &cosmic_theme::Spacing,
+) -> Element<'a, Message> {
+    let downloads = info.monthly_downloads;
+    let has_developer = !info.developer_name.is_empty();
+    widget::column::with_capacity(3)
+        .push(
+            // Between the heading (14) and title4 (20) presets
+            widget::text(&info.name)
+                .size(16.0)
+                .line_height(LineHeight::Absolute(24.0.into()))
+                .font(cosmic::font::bold())
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                .height(24.0),
+        )
+        .push(
+            widget::text::body(&info.summary)
+                .class(theme::Text::Custom(dim_text))
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+                .height(21.0),
+        )
+        .push(
+            widget::row::with_capacity(3)
+                .push_maybe((downloads > 0).then(|| {
+                    card_meta(
+                        widget::icon::from_name("folder-download-symbolic").icon(),
+                        downloads_label(downloads),
+                        cosmic::font::mono(),
+                        spacing,
+                    )
+                }))
+                .push_maybe((has_developer && downloads > 0).then(|| {
+                    widget::divider::vertical::default()
+                        .height(Length::Fixed(14.0))
+                        .class(theme::Rule::custom(|theme| {
+                            cosmic::iced::widget::rule::Style {
+                                color: dim_color(theme),
+                                radius: 0.0.into(),
+                                fill_mode: cosmic::iced::widget::rule::FillMode::Full,
+                                snap: false,
+                            }
+                        }))
+                }))
+                .push_maybe(has_developer.then(|| {
+                    card_meta(
+                        icon_cache_icon("store-developer-symbolic", 14),
+                        info.developer_name.as_str(),
+                        cosmic::font::default(),
+                        spacing,
+                    )
+                }))
+                .align_y(Alignment::Center)
+                .spacing(spacing.space_xs)
+                .height(17.0),
+        )
+        .into()
+}
+
+pub fn card_icon<'a>(
+    icon_opt: Option<&widget::icon::Handle>,
+    size: u16,
+    spacing: &cosmic_theme::Spacing,
+) -> Element<'a, Message> {
+    let icon: Element<_> = match icon_opt {
+        Some(icon) => widget::icon::icon(icon.clone()).size(size).into(),
+        None => widget::space().width(size).height(size).into(),
+    };
+    widget::container(icon)
+        .padding(spacing.space_xxs)
+        .class(theme::Container::Card)
+        .into()
+}
+
+pub fn card_icon_height(size: u16, spacing: &cosmic_theme::Spacing) -> f32 {
+    (size + 2 * spacing.space_xxs) as f32
+}
+
 pub fn package_card_view<'a>(
     info: &'a AppInfo,
     icon_opt: Option<&'a widget::icon::Handle>,
@@ -37,34 +175,11 @@ pub fn package_card_view<'a>(
     spacing: &cosmic_theme::Spacing,
     width: usize,
 ) -> Element<'a, Message> {
-    let height = 21.0
-        + 21.0
-        + spacing.space_xxs as f32
-        + 17.0
-        + spacing.space_xs as f32
-        + 32.0
+    let text_height = CARD_TEXT_HEIGHT + spacing.space_xs as f32 + 32.0;
+    let height = text_height.max(card_icon_height(ICON_SIZE_PACKAGE, spacing))
         + 2.0 * spacing.space_xxs as f32;
     let column = widget::column::with_children([
-        widget::column::with_children([
-            widget::text::heading(&info.name)
-                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                .height(21.0)
-                .into(),
-            widget::text::body(&info.summary)
-                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-                .height(21.0)
-                .into(),
-            widget::space().height(spacing.space_xxs).into(),
-            widget::text::caption(if info.developer_name.is_empty() {
-                String::new()
-            } else {
-                fl!("by-name", name = info.developer_name.as_str())
-            })
-            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-            .height(17.0)
-            .into(),
-        ])
-        .into(),
+        card_text_column(info, spacing),
         widget::space::vertical()
             .height(Length::Fixed(spacing.space_xs.into()))
             .into(),
@@ -74,15 +189,8 @@ pub fn package_card_view<'a>(
             .into(),
     ]);
 
-    let icon: Element<_> = match icon_opt {
-        Some(icon) => widget::icon::icon(icon.clone())
-            .size(ICON_SIZE_PACKAGE)
-            .into(),
-        None => widget::space::horizontal().width(ICON_SIZE_PACKAGE).into(),
-    };
-
     widget::row::with_capacity(2)
-        .push(icon)
+        .push(card_icon(icon_opt, ICON_SIZE_PACKAGE, spacing))
         .push(column)
         .align_y(Alignment::Center)
         .spacing(spacing.space_s)
@@ -91,7 +199,6 @@ pub fn package_card_view<'a>(
         .width(width as f32)
         .height(height)
         .padding([spacing.space_xxs, spacing.space_s])
-        .class(theme::Container::Card)
         .into()
 }
 

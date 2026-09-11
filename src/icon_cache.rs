@@ -45,6 +45,7 @@ impl IconCache {
         bundle!("store-updates-symbolic", 16);
         bundle!("store-utilities-symbolic", 16);
         bundle!("store-work-symbolic", 16);
+        bundle!("store-developer-symbolic", 14);
 
         Self { cache }
     }
